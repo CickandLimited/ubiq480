@@ -2,27 +2,46 @@
 
 This repository ships build helpers for assembling the Ubiq480 software image.
 
-## Root filesystem generation
+## Build pipeline
 
-The `build.py` helper exposes a small CLI:
-
-```
-./build.py rootfs
-```
-
-Running the `rootfs` command on a Linux host (as root) invokes `debootstrap`
-to assemble a Debian Bookworm `armel` root filesystem.  The resulting tree is
-staged inside `output/rootfs/`.  Configuration files such as `/etc/fstab`,
-hostname, networking, and the serial console getty override are written
-automatically during the build.  When `qemu-user-static` is available the
-static `qemu-arm` binary is copied into the rootfs to assist with any follow-up
-configuration inside the chroot.
-
-Install the required tooling before running the command:
+All build stages are coordinated by `build.py`.  The helper includes dedicated
+subcommands for each component as well as an `all` meta target that produces a
+fully populated microSD image in a single invocation.
 
 ```
-sudo apt-get install debootstrap qemu-user-static
+./build.py deps     # verify required host dependencies
+./build.py all      # build bootloader, kernel, rootfs and ubiq480.img
 ```
 
-All artifacts in the `output/` directory are ignored by Git and can be safely
-removed when no longer needed.
+The following artefacts are written to `output/`:
+
+* `u-boot.bin` – U-Boot bootloader binary.
+* `zImage` – Linux kernel image.
+* `imx31-ubiq480-g070vw01.dtb` – platform device tree blob.
+* `boot.scr` – compiled boot script.
+* `rootfs/` – Debian Bookworm ARMEL root filesystem.
+* `ubiq480.img` – bootable microSD card image.
+* `build.log` – aggregated log output mirroring the console.
+
+Source checkouts are cached under `output/cache/` so subsequent runs only need
+to rebuild changed artefacts.  All of these files remain ignored by Git via the
+repository `.gitignore` rules.
+
+### Root filesystem generation
+
+The `rootfs` stage internally runs `debootstrap` with QEMU user-mode emulation
+support when available.  The resulting filesystem tree includes essential
+configuration files (e.g. `/etc/fstab`, hostname, and serial console service
+overrides) and is staged to `output/rootfs/`.
+
+Install the required tooling before attempting a build.  Debian/Ubuntu hosts
+can use the following package set as a starting point:
+
+```
+sudo apt-get install build-essential git u-boot-tools gcc-arm-linux-gnueabi \
+    binutils-arm-linux-gnueabi debootstrap qemu-user-static dosfstools \
+    e2fsprogs util-linux
+```
+
+The final image assembly (`image` stage) requires root privileges because it
+creates loop devices, partitions them, and mounts the resulting filesystems.
