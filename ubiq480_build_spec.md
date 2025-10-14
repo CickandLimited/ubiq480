@@ -128,7 +128,7 @@ make arch/arm/boot/dts/imx31-ubiq480-g070vw01.dtb KCFLAGS="-march=armv6 -mtune=a
 
 ### 6.5 Prepare Boot Script
 
-Create `boot.cmd`:
+Create `boot/boot.cmd` (already tracked in the repository):
 
 ```bash
 setenv bootargs console=ttymxc0,115200 root=/dev/mmcblk0p2 rw rootwait video=mx3fb:800x480M-16@60
@@ -137,11 +137,13 @@ fatload mmc 0:1 0x100000 imx31-ubiq480-g070vw01.dtb
 bootz 0x8000 - 0x100000
 ```
 
-Compile the script:
+Compile the script by invoking the Python helper, which regenerates `boot.scr` using `mkimage` and installs the required tooling when missing:
 
 ```bash
-mkimage -A arm -T script -C none -n "UbiQ480 Boot" -d boot.cmd boot.scr
+./generate_boot_assets.py boot
 ```
+
+The helper validates that `mkimage` (from the `u-boot-tools` package) is installed—installing it automatically on Debian/Ubuntu hosts if necessary—and writes the binary script image to `boot/boot.scr`. The `scripts/mkimg.sh` wrapper is retained for backwards compatibility but simply delegates to the Python script.
 
 ## 7. Image Layout
 
@@ -188,10 +190,11 @@ ubiq480/
  ├── rootfs/                # Minimal Debian root filesystem
  ├── scripts/
  │    ├── ubiq480_build.py  # Automated build & logging tool
- │    └── mkimg.sh          # SD card image creation
+ │    └── mkimg.sh          # Legacy wrapper that calls generate_boot_assets.py
  ├── boot/
  │    ├── boot.cmd
- │    └── boot.scr
+ │    └── boot.scr          # Generated locally via generate_boot_assets.py (not tracked)
+ ├── generate_boot_assets.py
  ├── docs/
  │    ├── build-spec.md     # This document
  │    ├── hardware-notes.md
