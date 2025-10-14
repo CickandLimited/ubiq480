@@ -80,10 +80,9 @@ The intended output is a **bootable microSD image** that can replace the origina
 
 ## 6. Build Workflow
 
+### 6.1 Clone Repositories
 
-
-Clone Repositories
-
+```bash
 mkdir -p ~/ubiq480 && cd ~/ubiq480
 git clone https://source.denx.de/u-boot/u-boot.git
 git clone https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
@@ -92,93 +91,97 @@ tar -xf gcc-linaro-7.5.0-2019.12-x86_64_arm-linux-gnueabi.tar.xz
 export PATH=$PWD/gcc-linaro-7.5.0-2019.12-x86_64_arm-linux-gnueabi/bin:$PATH
 export CROSS_COMPILE=arm-linux-gnueabi-
 export ARCH=arm
+```
 
+### 6.2 Build U-Boot
 
-Build U-Boot
-
+```bash
 cd u-boot
 git checkout v2016.09
 make mx31ads_config
 make KCFLAGS=-march=armv5te -j$(nproc)
+```
 
+**Output:** `u-boot.bin`
 
-Output: u-boot.bin
+### 6.3 Build Kernel
 
-Build Kernel
-
+```bash
 cd ../linux
 git checkout v5.10.217
 make imx_v6_v7_defconfig
 make zImage KCFLAGS="-march=armv6 -mtune=arm1136jf-s -mfloat-abi=softfp -mfpu=vfp" -j$(nproc)
+```
 
+### 6.4 Add Custom Device Tree
 
-Add Custom Device Tree
+- **Path:** `arch/arm/boot/dts/imx31-ubiq480-g070vw01.dts`
+- **Purpose:** Defines display timings, memory size, GPIO backlight, and aliases.
 
-Path: arch/arm/boot/dts/imx31-ubiq480-g070vw01.dts
+Compile the device tree:
 
-Content defines display timings, memory size, GPIO backlight, and aliases.
-
-Compile:
-
+```bash
 make arch/arm/boot/dts/imx31-ubiq480-g070vw01.dtb KCFLAGS="-march=armv6 -mtune=arm1136jf-s -mfloat-abi=softfp -mfpu=vfp"
+```
 
+**Output:** `arch/arm/boot/dts/imx31-ubiq480-g070vw01.dtb`
 
-Output: arch/arm/boot/dts/imx31-ubiq480-g070vw01.dtb
+### 6.5 Prepare Boot Script
 
-Prepare Boot Script
+Create `boot.cmd`:
 
-boot.cmd
-
+```bash
 setenv bootargs console=ttymxc0,115200 root=/dev/mmcblk0p2 rw rootwait video=mx3fb:800x480M-16@60
 fatload mmc 0:1 0x8000 zImage
 fatload mmc 0:1 0x100000 imx31-ubiq480-g070vw01.dtb
 bootz 0x8000 - 0x100000
+```
 
+Compile the script:
 
-Compile it:
-
+```bash
 mkimage -A arm -T script -C none -n "UbiQ480 Boot" -d boot.cmd boot.scr
+```
 
-7. Image Layout
-Partition	Filesystem	Contents	Size
-Boot (p1)	FAT32	u-boot.bin, zImage, imx31-ubiq480-g070vw01.dtb, boot.scr	64 MB
-Root (p2)	ext4	Debian rootfs (debootstrap or prebuilt)	≥ 1 GB
-8. Expected Boot Sequence
+## 7. Image Layout
 
-Power on (PoE injector supplies 48 V).
+| Partition | Filesystem | Contents | Size |
+|-----------|------------|----------|------|
+| **Boot (p1)** | FAT32 | `u-boot.bin`, `zImage`, `imx31-ubiq480-g070vw01.dtb`, `boot.scr` | 64 MB |
+| **Root (p2)** | ext4 | Debian rootfs (debootstrap or prebuilt) | ≥ 1 GB |
 
-U-Boot loads from microSD (DIP 1 = OFF, DIP 2 = ON).
+## 8. Expected Boot Sequence
 
-boot.scr executes kernel and DTB load.
+1. Power on (PoE injector supplies 48 V).
+2. U-Boot loads from microSD (DIP 1 = OFF, DIP 2 = ON).
+3. `boot.scr` executes kernel and DTB load.
+4. Kernel initialises framebuffer and mounts rootfs.
+5. Login prompt or GUI auto-login appears.
+6. Serial console available on `/dev/ttymxc0` @ 115200 8N1.
+7. SSH available via DHCP-assigned IP.
 
-Kernel initialises framebuffer and mounts rootfs.
+## 9. Verification
 
-Login prompt or GUI auto-login appears.
+| Check | Expected Result |
+|-------|-----------------|
+| Serial output | U-Boot and kernel messages visible |
+| Framebuffer | 800×480 console visible |
+| Ethernet | DHCP lease acquired |
+| Rootfs mount | `/` on `/dev/mmcblk0p2` |
+| SSH | Login via Dropbear |
+| GUI | Matchbox or LXDE desktop shown |
 
-Serial console: /dev/ttymxc0 @ 115200 8N1.
-SSH available via DHCP-assigned IP.
+## 10. Future Work
 
-9. Verification
-Check	Expected Result
-Serial output	U-Boot and kernel messages visible
-Framebuffer	800×480 console visible
-Ethernet	DHCP lease acquired
-Rootfs mount	/ on /dev/mmcblk0p2
-SSH	Login via Dropbear
-GUI	Matchbox or LXDE desktop shown
-10. Future Work
+- Add ADS7846 touchscreen driver & calibration (`xinput_calibrator`).
+- Map GPIOs for backlight control.
+- Create systemd service for auto-start kiosk app.
+- Generate OTA update mechanism.
+- Package as reproducible `.img` for Etcher.
 
-Add ADS7846 touchscreen driver & calibration (xinput_calibrator).
+## 11. Repository Structure
 
-Map GPIOs for backlight control.
-
-Create systemd service for auto-start kiosk app.
-
-Generate OTA update mechanism.
-
-Package as reproducible .img for Etcher.
-
-11. Repository Structure
+```text
 ubiq480/
  ├── u-boot/                # Bootloader sources
  ├── linux/                 # Kernel sources
@@ -194,35 +197,25 @@ ubiq480/
  │    ├── hardware-notes.md
  │    └── debug-log.md
  └── README.md
+```
 
-12. References
+## 12. References
 
-U-Boot: https://source.denx.de/u-boot/u-boot
+- U-Boot: <https://source.denx.de/u-boot/u-boot>
+- NXP i.MX31 Reference Manual: *IMX31RM.pdf*
+- AUO G070VW01 V0 Datasheet
+- Debian ARM Ports: <https://wiki.debian.org/ArmPorts>
+- Linaro Toolchains: <https://releases.linaro.org/components/toolchain/binaries/>
 
-NXP i.MX31 Reference Manual: [IMX31RM.pdf]
-
-AUO G070VW01 V0 Datasheet
-
-Debian ARM Ports: https://wiki.debian.org/ArmPorts
-
-Linaro Toolchains: https://releases.linaro.org/components/toolchain/binaries/
-
-13. Goal for the Agent
+## 13. Goal for the Agent
 
 A coding agent (with terminal access and permission to install dependencies) should be able to:
 
-Clone the GitHub repository containing this document and the build scripts.
-
-Run a single orchestrator (build.py or make all) that:
-
-verifies dependencies;
-
-builds U-Boot, kernel, DTB;
-
-generates a boot.scr;
-
-assembles the SD image;
-
-and logs everything to build.log.
-
-Upload logs or images back to the repo for validation.
+1. Clone the GitHub repository containing this document and the build scripts.
+2. Run a single orchestrator (`build.py` or `make all`) that:
+   - verifies dependencies;
+   - builds U-Boot, kernel, DTB;
+   - generates a `boot.scr`;
+   - assembles the SD image; and
+   - logs everything to `build.log`.
+3. Upload logs or images back to the repo for validation.
