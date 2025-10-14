@@ -253,6 +253,29 @@ def build_uboot(_: argparse.Namespace) -> None:
     repo_path = ensure_repo(UBOOT_REPO, CACHE_DIR / "u-boot")
     checkout_ref(repo_path, UBOOT_REF)
 
+    arm_makefile = repo_path / "arch" / "arm" / "Makefile"
+    if arm_makefile.exists():
+        makefile_text = arm_makefile.read_text()
+        replacement = makefile_text.replace(
+            "arch-$(CONFIG_CPU_ARM1136)\t=-march=armv5",
+            "arch-$(CONFIG_CPU_ARM1136)\t=-march=armv5te",
+        )
+        if replacement == makefile_text:
+            replacement = makefile_text.replace(
+                "arch-$(CONFIG_CPU_ARM1136)      =-march=armv5",
+                "arch-$(CONFIG_CPU_ARM1136)      =-march=armv5te",
+            )
+        if replacement == makefile_text:
+            replacement = makefile_text.replace(
+                "arch-$(CONFIG_CPU_ARM1136)   =-march=armv5",
+                "arch-$(CONFIG_CPU_ARM1136)   =-march=armv5te",
+            )
+        if replacement != makefile_text:
+            arm_makefile.write_text(replacement)
+            LOG.info("Patched %s to use -march=armv5te", arm_makefile.relative_to(repo_path))
+        else:
+            LOG.debug("arm1136 march flag already modern or pattern missing")
+
     run_command(["make", "distclean"], cwd=repo_path, env=env)
     run_command(["make", UBOOT_CONFIG], cwd=repo_path, env=env)
     run_command(["make", f"-j{os.cpu_count() or 1}"], cwd=repo_path, env=env)
