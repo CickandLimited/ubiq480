@@ -1,0 +1,203 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
+
+/dts-v1/;
+
+#include "imx31.dtsi"
+
+/ {
+model = "Advantech UbiQ-480-ENWPLE (AUO G070VW01)";
+compatible = "advantech,ubiq480-g070vw01", "fsl,imx31";
+
+aliases {
+serial0 = &uart1;
+ethernet0 = &fec;
+spi0 = &spi1;
+};
+
+chosen {
+stdout-path = &uart1;
+};
+
+memory@80000000 {
+device_type = "memory";
+reg = <0x80000000 0x04000000>; /* 64 MiB */
+};
+
+regulators {
+compatible = "simple-bus";
+#address-cells = <1>;
+#size-cells = <0>;
+
+reg_lcd: regulator@0 {
+compatible = "regulator-fixed";
+reg = <0>;
+regulator-name = "vcc-lcd";
+regulator-min-microvolt = <3300000>;
+regulator-max-microvolt = <3300000>;
+enable-active-high;
+gpio = <&gpio2 24 0>;
+startup-delay-us = <1000>;
+};
+};
+
+panel_backlight: backlight {
+compatible = "pwm-backlight";
+power-supply = <&reg_lcd>;
+pwms = <&pwm 0 50000 0>;
+brightness-levels = <0 16 32 48 64 80 96 112 128 144 160 176 192 208 224 255>;
+default-brightness-level = <12>;
+status = "okay";
+};
+
+panel_lvds: panel {
+compatible = "auo,g070vw01";
+backlight = <&panel_backlight>;
+power-supply = <&reg_lcd>;
+enable-gpios = <&gpio2 25 0>;
+data-mapping = "jeida-18";
+width-mm = <152>;
+height-mm = <91>;
+
+panel-timing {
+clock-frequency = <33200000>;
+hactive = <800>;
+hfront-porch = <40>;
+hback-porch = <88>;
+hsync-len = <128>;
+vactive = <480>;
+vfront-porch = <5>;
+vback-porch = <35>;
+vsync-len = <2>;
+hsync-active = <0>;
+vsync-active = <0>;
+de-active = <1>;
+pixelclk-active = <0>;
+};
+
+port {
+panel_input: endpoint {
+remote-endpoint = <&ipu_di0_lvds>;
+};
+};
+};
+};
+
+&soc {
+ipu: ipu@53fc0000 {
+compatible = "fsl,imx31-ipu";
+reg = <0x53fc0000 0x4000>;
+interrupts = <6>;
+clocks = <&clks 43>;
+clock-names = "ipu";
+status = "okay";
+
+display-controller {
+compatible = "fsl,imx31-mx3fb";
+clocks = <&clks 43>;
+clock-names = "ipu";
+status = "okay";
+
+port@0 {
+reg = <0>;
+
+ipu_di0_lvds: endpoint {
+remote-endpoint = <&panel_input>;
+bus-width = <18>;
+};
+};
+};
+};
+
+fec: ethernet@53fec000 {
+compatible = "fsl,imx31-fec", "fsl,imx27-fec";
+reg = <0x53fec000 0x4000>;
+interrupts = <39>;
+clocks = <&clks 10>, <&clks 23>;
+clock-names = "ipg", "ahb";
+phy-mode = "rmii";
+local-mac-address = [00 11 22 33 44 55];
+status = "okay";
+};
+
+pinctrl: iomuxc@43fac000 {
+compatible = "fsl,imx31-iomuxc";
+reg = <0x43fac000 0x4000>;
+
+ubiq480_uart1: uart1grp {
+fsl,pins = <
+0x000 0x004 0x000 0x0 0x0 0x0
+0x008 0x00c 0x000 0x0 0x0 0x0
+>;
+};
+
+ubiq480_spi1: spi1grp {
+fsl,pins = <
+0x010 0x014 0x000 0x0 0x0 0x0
+0x018 0x01c 0x000 0x0 0x0 0x0
+0x020 0x024 0x000 0x0 0x0 0x0
+>;
+};
+
+ubiq480_pwm: pwmgrp {
+fsl,pins = <
+0x028 0x02c 0x000 0x0 0x0 0x0
+>;
+};
+
+ubiq480_fec: fecgrp {
+fsl,pins = <
+0x030 0x034 0x000 0x0 0x0 0x0
+0x038 0x03c 0x000 0x0 0x0 0x0
+0x040 0x044 0x000 0x0 0x0 0x0
+0x048 0x04c 0x000 0x0 0x0 0x0
+0x050 0x054 0x000 0x0 0x0 0x0
+>;
+};
+
+ubiq480_touch: touchgrp {
+fsl,pins = <
+0x058 0x05c 0x000 0x0 0x0 0x0
+>;
+};
+};
+};
+
+&uart1 {
+pinctrl-names = "default";
+pinctrl-0 = <&ubiq480_uart1>;
+status = "okay";
+};
+
+&pwm {
+pinctrl-names = "default";
+pinctrl-0 = <&ubiq480_pwm>;
+status = "okay";
+};
+
+&spi1 {
+pinctrl-names = "default";
+pinctrl-0 = <&ubiq480_spi1>;
+status = "okay";
+cs-gpios = <&gpio2 9 1>;
+
+touchscreen@0 {
+compatible = "ti,ads7846";
+reg = <0>;
+spi-max-frequency = <2000000>;
+interrupt-parent = <&gpio3>;
+interrupts = <12 2>;
+pendown-gpio = <&gpio3 12 1>;
+vcc-supply = <&reg_lcd>;
+wakeup-source;
+ti,x-plate-ohms = <400>;
+ti,pressure-max = <255>;
+};
+};
+
+&pinctrl {
+status = "okay";
+};
+
+&pinctrl { /* ensure alias exists for dtc */
+};
+
