@@ -1,3 +1,4 @@
+import argparse
 import unittest
 from unittest import mock
 
@@ -45,6 +46,33 @@ class BuildMainTests(unittest.TestCase):
             exit_code = build.main([])
 
         self.assertEqual(1, exit_code)
+
+    def test_repository_tree_logged_after_successful_run(self) -> None:
+        stage_mock = mock.Mock()
+
+        with mock.patch("build.setup_logging"), mock.patch("build.ensure_latest_checkout"), mock.patch(
+            "build.set_bootstrap_enabled"
+        ), mock.patch("build.confirm_execution", return_value=True), mock.patch.dict(
+            build.STAGE_EXECUTORS, {"deps": stage_mock}, clear=False
+        ), mock.patch("build.log_repository_tree") as tree_mock:
+            exit_code = build.main(["deps"])
+
+        self.assertEqual(0, exit_code)
+        tree_mock.assert_called_once_with(build.REPO_ROOT, build.LOG)
+
+    def test_repository_tree_logged_after_failed_run(self) -> None:
+        def _fail(_: argparse.Namespace) -> None:
+            raise RuntimeError("boom")
+
+        with mock.patch("build.setup_logging"), mock.patch("build.ensure_latest_checkout"), mock.patch(
+            "build.set_bootstrap_enabled"
+        ), mock.patch("build.confirm_execution", return_value=True), mock.patch.dict(
+            build.STAGE_EXECUTORS, {"deps": _fail}, clear=False
+        ), mock.patch("build.log_repository_tree") as tree_mock:
+            exit_code = build.main(["deps"])
+
+        self.assertEqual(1, exit_code)
+        tree_mock.assert_called_once_with(build.REPO_ROOT, build.LOG)
 
 
 if __name__ == "__main__":  # pragma: no cover

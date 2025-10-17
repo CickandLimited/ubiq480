@@ -212,6 +212,60 @@ STAGE_ARTEFACTS: dict[str, list[StageArtefact]] = {
 }
 
 
+def log_repository_tree(base: Path, logger: logging.Logger) -> None:
+    """Log an indented tree representation of files within ``base``.
+
+    The helper focuses on generated artefacts by traversing the repository and
+    omitting common transient directories such as ``.git`` or ``__pycache__``.
+    Each directory and file is logged with indentation to highlight the
+    structure relative to the repository root.
+    """
+
+    skip_names = {
+        ".git",
+        "__pycache__",
+        ".pytest_cache",
+        ".mypy_cache",
+        ".venv",
+        "venv",
+        ".tox",
+    }
+
+    if not base.exists():
+        logger.info("Repository root %s does not exist; skipping tree logging.", base)
+        return
+
+    def _should_skip(path: Path) -> bool:
+        try:
+            relative_parts = path.relative_to(base).parts
+        except ValueError:
+            return True
+        return any(part in skip_names for part in relative_parts)
+
+    def _gather(path: Path, depth: int, lines: list[str]) -> None:
+        try:
+            children = sorted(path.iterdir(), key=lambda entry: (not entry.is_dir(), entry.name))
+        except OSError as exc:
+            logger.debug("Unable to list directory %s: %s", path, exc)
+            return
+
+        for child in children:
+            if _should_skip(child):
+                continue
+
+            display_name = child.name + ("/" if child.is_dir() else "")
+            lines.append("    " * depth + display_name)
+            if child.is_dir():
+                _gather(child, depth + 1, lines)
+
+    lines: list[str] = ["."]
+    _gather(base, 1, lines)
+
+    logger.info("Repository artefact tree:")
+    for line in lines:
+        logger.info(line)
+
+
 def format_size(estimated_mb: int | None) -> str:
     """Return a human-readable approximation for *estimated_mb*."""
 
@@ -1062,27 +1116,30 @@ def _interactive_stage_selection() -> list[str]:
 
 
 def _run_selected_commands(commands: list[str], args: argparse.Namespace) -> int:
-    for command in commands:
-        if command == "all":
-            if not confirm_execution("all", assume_yes=args.yes):
+    try:
+        for command in commands:
+            if command == "all":
+                if not confirm_execution("all", assume_yes=args.yes):
+                    return 1
+                try:
+                    run_all(args)
+                except RuntimeError as exc:
+                    LOG.error("%s", exc)
+                    return 1
+                continue
+
+            if not confirm_execution(command, assume_yes=args.yes):
                 return 1
+
+            executor = STAGE_EXECUTORS[command]
             try:
-                run_all(args)
+                executor(args)
             except RuntimeError as exc:
                 LOG.error("%s", exc)
                 return 1
-            continue
-
-        if not confirm_execution(command, assume_yes=args.yes):
-            return 1
-
-        executor = STAGE_EXECUTORS[command]
-        try:
-            executor(args)
-        except RuntimeError as exc:
-            LOG.error("%s", exc)
-            return 1
-    return 0
+        return 0
+    finally:
+        log_repository_tree(REPO_ROOT, LOG)
 
 
 def main(argv: list[str] | None = None) -> int:
