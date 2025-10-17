@@ -13,6 +13,16 @@ fully populated microSD image in a single invocation.
 ./build.py all      # build bootloader, kernel, rootfs and ubiq480.img
 ```
 
+Before any stage runs, the helper prints a summary of the artefacts that will be
+downloaded or created along with their estimated sizes.  Confirm the prompt to
+continue or abort with the default `N` response.  Supply `--yes` for
+non-interactive or automated environments to skip the confirmation while still
+emitting the summary, for example:
+
+```
+./build.py --yes all
+```
+
 The following artefacts are written to `output/`:
 
 * `u-boot.bin` – U-Boot bootloader binary.
