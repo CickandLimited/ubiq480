@@ -41,6 +41,9 @@ REPO_ROOT = Path(__file__).resolve().parent
 OUTPUT_DIR = REPO_ROOT / "output"
 CACHE_DIR = OUTPUT_DIR / "cache"
 
+DEFAULT_SHALLOW_DEPTH = 64
+MIN_FREE_DISK_BYTES = 1 * 1024 * 1024 * 1024  # 1 GiB
+
 UBOOT_REPO = "https://source.denx.de/u-boot/u-boot.git"
 UBOOT_REF = "v2016.09"
 UBOOT_CONFIG = "mx31ads_config"
@@ -177,6 +180,7 @@ def run_command(
         LOG.info(line.rstrip())
         print(line, end="")
 
+    process.stdout.close()
     returncode = process.wait()
     if check and returncode != 0:
         raise subprocess.CalledProcessError(returncode, command, output="".join(output_lines))
@@ -201,6 +205,71 @@ def ensure_command_available(command: str) -> None:
         if hint:
             message = f"{message} Try: {hint}"
         raise RuntimeError(message)
+
+
+def _ensure_sufficient_disk_space(path: Path, *, required_bytes: int = MIN_FREE_DISK_BYTES) -> None:
+    """Validate that *path* has at least *required_bytes* of free space."""
+
+    usage = shutil.disk_usage(path)
+    if usage.free < required_bytes:
+        required_gib = required_bytes / (1024**3)
+        available_gib = usage.free / (1024**3)
+        message = (
+            f"Insufficient disk space in {path}. "
+            f"{available_gib:.2f} GiB available but {required_gib:.2f} GiB required. "
+            "Free disk space or move the cache directory before retrying."
+        )
+        LOG.error(message)
+        raise RuntimeError(message)
+
+
+def _ref_exists(path: Path, ref: str) -> bool:
+    """Return ``True`` if *ref* is available inside the git repository at *path*."""
+
+    result = run_command(
+        ["git", "rev-parse", "--verify", ref],
+        cwd=path,
+        capture_output=True,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def ensure_repo(url: str, destination: Path, ref: str | None = None) -> Path:
+    """Ensure a shallow clone of *url* exists at *destination* and contains *ref*."""
+
+    if not destination.exists():
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        _ensure_sufficient_disk_space(destination.parent)
+        clone_cmd = ["git", "clone", "--depth", str(DEFAULT_SHALLOW_DEPTH)]
+        if ref:
+            clone_cmd.extend(["--branch", ref, "--single-branch"])
+        clone_cmd.extend([url, str(destination)])
+        LOG.info("Cloning %s into %s with depth %s", url, destination, DEFAULT_SHALLOW_DEPTH)
+        run_command(clone_cmd)
+        return destination
+
+    if ref and _ref_exists(destination, ref):
+        LOG.info("Reusing cached repository %s for ref %s", destination, ref)
+        return destination
+
+    _ensure_sufficient_disk_space(destination)
+    LOG.info(
+        "Updating cached repository %s with shallow fetch (depth %s)",
+        destination,
+        DEFAULT_SHALLOW_DEPTH,
+    )
+    fetch_cmd = [
+        "git",
+        "fetch",
+        "--prune",
+        "--tags",
+        "--depth",
+        str(DEFAULT_SHALLOW_DEPTH),
+        "origin",
+    ]
+    run_command(fetch_cmd, cwd=destination)
+    return destination
 
 
 def prepare_output_directory(path: Path) -> None:
@@ -229,15 +298,6 @@ def configure_toolchain_env() -> dict[str, str]:
     return env
 
 
-def ensure_repo(url: str, destination: Path) -> Path:
-    if not destination.exists():
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        run_command(["git", "clone", url, str(destination)])
-    else:
-        run_command(["git", "fetch", "--all", "--tags", "--prune"], cwd=destination)
-    return destination
-
-
 def checkout_ref(path: Path, ref: str) -> None:
     run_command(["git", "checkout", "--force", ref], cwd=path)
     run_command(["git", "reset", "--hard", ref], cwd=path)
@@ -250,7 +310,7 @@ def build_uboot(_: argparse.Namespace) -> None:
     env = configure_toolchain_env()
     env["KCFLAGS"] = "-march=armv5te"
 
-    repo_path = ensure_repo(UBOOT_REPO, CACHE_DIR / "u-boot")
+    repo_path = ensure_repo(UBOOT_REPO, CACHE_DIR / "u-boot", UBOOT_REF)
     checkout_ref(repo_path, UBOOT_REF)
 
     arm_makefile = repo_path / "arch" / "arm" / "Makefile"
@@ -293,7 +353,7 @@ def build_kernel(_: argparse.Namespace) -> None:
     env = configure_toolchain_env()
     env["KCFLAGS"] = "-march=armv6 -mtune=arm1136jf-s -mfloat-abi=softfp -mfpu=vfp"
 
-    repo_path = ensure_repo(KERNEL_REPO, CACHE_DIR / "linux")
+    repo_path = ensure_repo(KERNEL_REPO, CACHE_DIR / "linux", KERNEL_REF)
     checkout_ref(repo_path, KERNEL_REF)
 
     run_command(["make", "mrproper"], cwd=repo_path, env=env)
@@ -312,7 +372,7 @@ def build_dtb(_: argparse.Namespace) -> None:
     env = configure_toolchain_env()
     env["KCFLAGS"] = "-march=armv6 -mtune=arm1136jf-s -mfloat-abi=softfp -mfpu=vfp"
 
-    repo_path = ensure_repo(KERNEL_REPO, CACHE_DIR / "linux")
+    repo_path = ensure_repo(KERNEL_REPO, CACHE_DIR / "linux", KERNEL_REF)
     checkout_ref(repo_path, KERNEL_REF)
 
     run_command(["make", KERNEL_DEFCONFIG], cwd=repo_path, env=env)
