@@ -16,8 +16,7 @@ pipeline is exposed as a sub-command:
 * ``all`` – execute the entire workflow sequentially.
 
 The helper keeps source checkouts inside ``output/cache`` to avoid polluting the
-repository and logs all console output to ``output/build.log`` for later
-inspection.
+repository and logs all console output to ``build.log`` for later inspection.
 """
 
 from __future__ import annotations
@@ -54,6 +53,7 @@ LOG = logging.getLogger("ubiq480.build")
 REPO_ROOT = Path(__file__).resolve().parent
 OUTPUT_DIR = REPO_ROOT / "output"
 CACHE_DIR = OUTPUT_DIR / "cache"
+BUILD_LOG_PATH = REPO_ROOT / "build.log"
 REQUIREMENTS_FILE = REPO_ROOT / "requirements.txt"
 
 DEFAULT_SHALLOW_DEPTH = 64
@@ -355,15 +355,14 @@ class CommandResult:
 
 
 def setup_logging() -> None:
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = OUTPUT_DIR / "build.log"
+    BUILD_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     LOG.setLevel(logging.INFO)
     LOG.handlers.clear()
 
     formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s")
 
-    file_handler = logging.FileHandler(log_path, mode="w")
+    file_handler = logging.FileHandler(BUILD_LOG_PATH, mode="w")
     file_handler.setFormatter(formatter)
     file_handler.setLevel(logging.INFO)
 
@@ -474,6 +473,37 @@ def run_command(
         raise subprocess.CalledProcessError(returncode, prepared_command, output="".join(output_lines))
 
     return CommandResult(prepared_command, returncode, "".join(output_lines))
+
+
+def push_log_file(log_path: Path) -> None:
+    """Attempt to push *log_path* to the remote repository."""
+
+    try:
+        relative = log_path.relative_to(REPO_ROOT)
+    except ValueError:
+        relative = log_path
+
+    steps = [
+        (["git", "add", str(relative)], "stage"),
+        (["git", "commit", "-m", "chore: update build log"], "commit"),
+        (["git", "push"], "push"),
+    ]
+
+    for command, action in steps:
+        try:
+            subprocess.run(
+                command,
+                check=True,
+                cwd=REPO_ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+        except (subprocess.CalledProcessError, OSError) as exc:
+            LOG.warning("Failed to %s build log: %s", action, exc)
+            return
+
+    LOG.info("Pushed updated build log to remote repository.")
 
 
 def require_linux() -> None:
@@ -1115,29 +1145,32 @@ def _interactive_stage_selection() -> list[str]:
     )
 
 
-def _run_selected_commands(commands: list[str], args: argparse.Namespace) -> int:
+def _run_selected_commands(commands: list[str], args: argparse.Namespace) -> tuple[int, bool]:
+    executed_any = False
     try:
         for command in commands:
             if command == "all":
                 if not confirm_execution("all", assume_yes=args.yes):
-                    return 1
+                    return 1, executed_any
                 try:
+                    executed_any = True
                     run_all(args)
                 except RuntimeError as exc:
                     LOG.error("%s", exc)
-                    return 1
+                    return 1, executed_any
                 continue
 
             if not confirm_execution(command, assume_yes=args.yes):
-                return 1
+                return 1, executed_any
 
             executor = STAGE_EXECUTORS[command]
             try:
+                executed_any = True
                 executor(args)
             except RuntimeError as exc:
                 LOG.error("%s", exc)
-                return 1
-        return 0
+                return 1, executed_any
+        return 0, executed_any
     finally:
         log_repository_tree(REPO_ROOT, LOG)
 
@@ -1185,7 +1218,10 @@ def main(argv: list[str] | None = None) -> int:
             LOG.info("'all' selected alongside other stages; executing the full pipeline.")
             commands = ["all"]
 
-    return _run_selected_commands(commands, args)
+    exit_code, executed_any = _run_selected_commands(commands, args)
+    if executed_any:
+        push_log_file(BUILD_LOG_PATH)
+    return exit_code
 
 
 if __name__ == "__main__":

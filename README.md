@@ -34,11 +34,11 @@ The following artefacts are written to `output/`:
 * `boot.scr` – compiled boot script.
 * `rootfs/` – Debian Bookworm ARMEL root filesystem.
 * `ubiq480.img` – bootable microSD card image.
-* `build.log` – aggregated log output mirroring the console.
 
 Source checkouts are cached under `output/cache/` so subsequent runs only need
 to rebuild changed artefacts.  All of these files remain ignored by Git via the
-repository `.gitignore` rules.
+repository `.gitignore` rules.  Console output is mirrored to a tracked
+`build.log` file at the repository root for post-run inspection.
 
 ### Root filesystem generation
 
