@@ -39,6 +39,12 @@ from pathlib import Path
 from textwrap import dedent
 from typing import Callable
 
+from host_bootstrap import (
+    ensure_commands,
+    ensure_python_requirements,
+    ensure_tool,
+    set_bootstrap_enabled,
+)
 from progress import ProgressUpdate, format_progress_message, get_progress_parser
 
 LOG = logging.getLogger("ubiq480.build")
@@ -46,6 +52,7 @@ LOG = logging.getLogger("ubiq480.build")
 REPO_ROOT = Path(__file__).resolve().parent
 OUTPUT_DIR = REPO_ROOT / "output"
 CACHE_DIR = OUTPUT_DIR / "cache"
+REQUIREMENTS_FILE = REPO_ROOT / "requirements.txt"
 
 DEFAULT_SHALLOW_DEPTH = 64
 MIN_FREE_DISK_BYTES = 1 * 1024 * 1024 * 1024  # 1 GiB
@@ -419,12 +426,7 @@ def require_root_privileges() -> None:
 
 
 def ensure_command_available(command: str) -> None:
-    if shutil.which(command) is None:
-        hint = DEPENDENCY_HINTS.get(command)
-        message = f"Required command '{command}' not found in PATH."
-        if hint:
-            message = f"{message} Try: {hint}"
-        raise RuntimeError(message)
+    ensure_tool(command, hints=DEPENDENCY_HINTS, logger=LOG)
 
 
 def _iter_output_segments(text: str) -> list[str]:
@@ -665,10 +667,6 @@ def write_config_file(root: Path, relative_path: str, content: str) -> None:
     text = dedent(content).lstrip("\n")
     destination.write_text(text)
     LOG.info("Wrote %s", destination.relative_to(root))
-
-
-def find_missing_commands(commands: list[str]) -> list[str]:
-    return [cmd for cmd in commands if shutil.which(cmd) is None]
 
 
 def configure_toolchain_env() -> dict[str, str]:
@@ -1000,7 +998,7 @@ def build_image(_: argparse.Namespace) -> None:
 
 
 def check_dependencies(_: argparse.Namespace) -> None:
-    missing = find_missing_commands(ALL_DEPENDENCIES)
+    missing = ensure_commands(ALL_DEPENDENCIES, hints=DEPENDENCY_HINTS, logger=LOG)
     if missing:
         for command in missing:
             hint = DEPENDENCY_HINTS.get(command)
@@ -1011,6 +1009,7 @@ def check_dependencies(_: argparse.Namespace) -> None:
         raise RuntimeError(
             "One or more required tools are unavailable. Install the missing dependencies and retry."
         )
+    ensure_python_requirements(REQUIREMENTS_FILE, OUTPUT_DIR / "venv", logger=LOG)
     LOG.info("All required build dependencies are available.")
 
 
@@ -1036,6 +1035,11 @@ def main(argv: list[str] | None = None) -> int:
         "--yes",
         action="store_true",
         help="Automatically confirm the artefact summary prompts.",
+    )
+    parser.add_argument(
+        "--no-bootstrap",
+        action="store_true",
+        help="Skip automatic installation of missing host dependencies.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -1067,6 +1071,7 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     setup_logging()
+    set_bootstrap_enabled(not args.no_bootstrap)
     if not confirm_execution(args.command, assume_yes=args.yes):
         return 1
     try:
