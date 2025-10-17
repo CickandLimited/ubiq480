@@ -10,6 +10,8 @@ class GenerateBootAssetsMainTests(unittest.TestCase):
         boot_mock = mock.Mock()
 
         with mock.patch("generate_boot_assets.logging.basicConfig"), mock.patch(
+            "generate_boot_assets.ensure_latest_checkout"
+        ), mock.patch(
             "generate_boot_assets.set_bootstrap_enabled"
         ), mock.patch(
             "generate_boot_assets.prompt_for_menu_selection", return_value=["deps", "boot"]
@@ -28,6 +30,8 @@ class GenerateBootAssetsMainTests(unittest.TestCase):
         deps_mock = mock.Mock()
 
         with mock.patch("generate_boot_assets.logging.basicConfig"), mock.patch(
+            "generate_boot_assets.ensure_latest_checkout"
+        ), mock.patch(
             "generate_boot_assets.set_bootstrap_enabled"
         ), mock.patch.dict(generate_boot_assets.ACTION_EXECUTORS, {"deps": deps_mock}, clear=False):
             exit_code = generate_boot_assets.main(["deps"])
@@ -37,6 +41,8 @@ class GenerateBootAssetsMainTests(unittest.TestCase):
 
     def test_interactive_cancel_returns_error(self) -> None:
         with mock.patch("generate_boot_assets.logging.basicConfig"), mock.patch(
+            "generate_boot_assets.ensure_latest_checkout"
+        ), mock.patch(
             "generate_boot_assets.set_bootstrap_enabled"
         ), mock.patch(
             "generate_boot_assets.prompt_for_menu_selection", side_effect=generate_boot_assets.MenuCancelled

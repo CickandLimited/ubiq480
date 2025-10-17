@@ -19,6 +19,7 @@ from pathlib import Path
 
 from cli_prompts import MenuCancelled, MenuOption, prompt_for_menu_selection
 from host_bootstrap import ensure_tool, set_bootstrap_enabled
+from self_check import ensure_latest_checkout
 
 REPO_ROOT = Path(__file__).resolve().parent
 BOOT_DIR = REPO_ROOT / "boot"
@@ -108,6 +109,7 @@ def main(argv: list[str]) -> int:
 
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO)
+    ensure_latest_checkout(REPO_ROOT, logger=LOG)
     set_bootstrap_enabled(not args.no_bootstrap)
 
     if args.command:
