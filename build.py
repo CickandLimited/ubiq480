@@ -66,7 +66,8 @@ UBOOT_CONFIG = "mx31ads_config"
 KERNEL_REPO = "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git"
 KERNEL_REF = "v5.10.217"
 KERNEL_DEFCONFIG = "imx_v4_v5_defconfig"
-DTB_TARGET = "arch/arm/boot/dts/imx31-ubiq480-g070vw01.dtb"
+DTB_TARGET = "arch/arm/boot/dts/imx31-lite.dtb"
+
 
 BOOT_CMD = REPO_ROOT / "boot" / "boot.cmd"
 BOOT_SCR = OUTPUT_DIR / "boot.scr"
