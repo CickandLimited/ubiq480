@@ -31,10 +31,15 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from textwrap import dedent
 from typing import Callable
+
+from progress import ProgressUpdate, format_progress_message, get_progress_parser
 
 LOG = logging.getLogger("ubiq480.build")
 
@@ -313,11 +318,39 @@ def run_command(
 ) -> CommandResult:
     """Run *command* while mirroring stdout to the logger and console."""
 
-    LOG.info("$ %s", " ".join(command))
+    parser, prepared_command = get_progress_parser(list(command))
+    LOG.info("$ %s", " ".join(prepared_command))
+
+    output_lines: list[str] = []
+
+    def emit_line(message: str, *, console: str | None = None) -> None:
+        LOG.info(message)
+        print(console if console is not None else message, flush=True)
+        output_lines.append(message + "\n")
+
+    def emit_progress(update: ProgressUpdate) -> None:
+        emit_line(format_progress_message(update))
+
+    download_returncode = _maybe_run_python_download(
+        prepared_command,
+        cwd=cwd,
+        emit_line=emit_line,
+        emit_progress=emit_progress,
+        capture_output=capture_output,
+        input_text=input_text,
+    )
+    if download_returncode is not None:
+        if check and download_returncode != 0:
+            raise subprocess.CalledProcessError(
+                download_returncode,
+                prepared_command,
+                output="".join(output_lines),
+            )
+        return CommandResult(prepared_command, download_returncode, "".join(output_lines))
 
     if capture_output:
         completed = subprocess.run(
-            command,
+            prepared_command,
             cwd=cwd,
             env=env,
             check=False,
@@ -327,19 +360,26 @@ def run_command(
             stderr=subprocess.STDOUT,
         )
         if completed.stdout:
-            for line in completed.stdout.splitlines():
-                LOG.info(line)
-                print(line)
+            for segment in _iter_output_segments(completed.stdout):
+                handled = False
+                if parser:
+                    updates = parser.parse(segment)
+                    if updates:
+                        handled = True
+                        for update in updates:
+                            emit_progress(update)
+                if not handled:
+                    emit_line(segment.rstrip(), console=segment)
         if check and completed.returncode != 0:
             raise subprocess.CalledProcessError(
                 completed.returncode,
-                command,
-                output=completed.stdout,
+                prepared_command,
+                output="".join(output_lines),
             )
-        return CommandResult(command, completed.returncode, completed.stdout or "")
+        return CommandResult(prepared_command, completed.returncode, "".join(output_lines))
 
     process = subprocess.Popen(
-        command,
+        prepared_command,
         cwd=cwd,
         env=env,
         text=True,
@@ -348,18 +388,24 @@ def run_command(
     )
     assert process.stdout is not None  # For type-checkers.
 
-    output_lines: list[str] = []
-    for line in process.stdout:
-        output_lines.append(line)
-        LOG.info(line.rstrip())
-        print(line, end="")
+    for raw_line in process.stdout:
+        for segment in _iter_output_segments(raw_line):
+            handled = False
+            if parser:
+                updates = parser.parse(segment)
+                if updates:
+                    handled = True
+                    for update in updates:
+                        emit_progress(update)
+            if not handled:
+                emit_line(segment.rstrip(), console=segment)
 
     process.stdout.close()
     returncode = process.wait()
     if check and returncode != 0:
-        raise subprocess.CalledProcessError(returncode, command, output="".join(output_lines))
+        raise subprocess.CalledProcessError(returncode, prepared_command, output="".join(output_lines))
 
-    return CommandResult(command, returncode, "".join(output_lines))
+    return CommandResult(prepared_command, returncode, "".join(output_lines))
 
 
 def require_linux() -> None:
@@ -379,6 +425,166 @@ def ensure_command_available(command: str) -> None:
         if hint:
             message = f"{message} Try: {hint}"
         raise RuntimeError(message)
+
+
+def _iter_output_segments(text: str) -> list[str]:
+    """Return sanitized output *text* split into logical display segments."""
+
+    if not text:
+        return []
+    return text.replace("\r", "\n").splitlines()
+
+
+def _maybe_run_python_download(
+    command: list[str],
+    *,
+    cwd: Path | None,
+    emit_line: Callable[[str], None],
+    emit_progress: Callable[[ProgressUpdate], None],
+    capture_output: bool,
+    input_text: str | None,
+) -> int | None:
+    """Intercept download commands lacking native progress support."""
+
+    if capture_output or input_text is not None or not command:
+        return None
+
+    parsed = _parse_download_command(command)
+    if not parsed:
+        return None
+
+    url, output = parsed
+    destination = Path(output)
+    if not destination.is_absolute():
+        base_dir = cwd if cwd is not None else Path.cwd()
+        destination = base_dir / destination
+
+    emit_line(f"Downloading {url} -> {destination}")
+    try:
+        return_code = _download_with_progress(url, destination, emit_progress)
+    except Exception as exc:  # noqa: BLE001
+        emit_line(f"Download failed: {exc}")
+        return 1
+
+    emit_line(f"Download complete: {destination}")
+    return return_code
+
+
+def _parse_download_command(command: list[str]) -> tuple[str, str] | None:
+    """Return ``(url, output_path)`` if *command* resembles curl/wget usage."""
+
+    program = Path(command[0]).name
+    args = command[1:]
+    url: str | None = None
+    output: str | None = None
+
+    if program == "curl":
+        iterator = iter(args)
+        for token in iterator:
+            if token in {"-L", "--location", "-s", "--silent"}:
+                continue
+            if token in {"-o", "--output"}:
+                output = next(iterator, None)
+                continue
+            if token.startswith("--output="):
+                output = token.split("=", 1)[1]
+                continue
+            if token.startswith("-"):
+                continue
+            if url is None:
+                url = token
+        if url and output is None:
+            path = urllib.parse.urlparse(url).path
+            output = Path(path).name or "download"
+    elif program == "wget":
+        iterator = iter(args)
+        for token in iterator:
+            if token in {"-O", "--output-document"}:
+                output = next(iterator, None)
+                continue
+            if token.startswith("--output-document="):
+                output = token.split("=", 1)[1]
+                continue
+            if token.startswith("-"):
+                continue
+            if url is None:
+                url = token
+        if url and output is None:
+            path = urllib.parse.urlparse(url).path
+            output = Path(path).name or "download"
+    else:
+        return None
+
+    if url and output:
+        return url, output
+    return None
+
+
+def _download_with_progress(
+    url: str,
+    destination: Path,
+    emit_progress: Callable[[ProgressUpdate], None],
+) -> int:
+    """Download *url* to *destination* while emitting progress updates."""
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+
+    start_time = time.monotonic()
+    downloaded = 0
+    last_report_time = start_time
+    last_percent: int | None = None
+
+    with contextlib.closing(urllib.request.urlopen(url)) as response:
+        total_header = response.getheader("Content-Length")
+        try:
+            total_bytes = int(total_header) if total_header is not None else None
+        except (TypeError, ValueError):  # pragma: no cover - defensive
+            total_bytes = None
+        chunk_size = 64 * 1024
+        with destination.open("wb") as file_obj:
+            while True:
+                chunk = response.read(chunk_size)
+                if not chunk:
+                    break
+                file_obj.write(chunk)
+                downloaded += len(chunk)
+                now = time.monotonic()
+                percent = None
+                if total_bytes:
+                    percent = (downloaded / total_bytes) * 100
+                elapsed = max(now - start_time, 1e-6)
+                speed = downloaded / elapsed
+                should_emit = False
+                if percent is not None:
+                    percent_int = int(percent)
+                    if percent_int != last_percent or now - last_report_time >= 1.0:
+                        last_percent = percent_int
+                        should_emit = True
+                elif now - last_report_time >= 1.0:
+                    should_emit = True
+                if should_emit:
+                    emit_progress(
+                        ProgressUpdate(
+                            label="download",
+                            percent=percent,
+                            size_bytes=downloaded,
+                            total_size_bytes=total_bytes,
+                            speed_bytes_per_sec=speed,
+                        )
+                    )
+                    last_report_time = now
+
+    elapsed_total = max(time.monotonic() - start_time, 1e-6)
+    emit_progress(
+        ProgressUpdate(
+            label="download",
+            percent=100.0 if downloaded and total_bytes else None,
+            size_bytes=downloaded,
+            total_size_bytes=total_bytes,
+            speed_bytes_per_sec=downloaded / elapsed_total if downloaded else None,
+        )
+    )
+    return 0
 
 
 def _ensure_sufficient_disk_space(path: Path, *, required_bytes: int = MIN_FREE_DISK_BYTES) -> None:
