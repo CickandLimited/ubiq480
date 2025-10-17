@@ -66,8 +66,8 @@ following package set as a starting point:
 
 ```
 sudo apt-get install build-essential git u-boot-tools gcc-arm-linux-gnueabi \
-    binutils-arm-linux-gnueabi debootstrap qemu-user-static dosfstools \
-    e2fsprogs util-linux
+    binutils-arm-linux-gnueabi debootstrap bison flex qemu-user-static \
+    dosfstools e2fsprogs util-linux
 ```
 
 The final image assembly (`image` stage) requires root privileges because it
