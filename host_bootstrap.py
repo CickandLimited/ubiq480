@@ -59,6 +59,11 @@ PACKAGE_MAP: dict[str, Mapping[str, Sequence[str]]] = {
     "dnf": DNF_PACKAGE_MAP,
 }
 
+PYTHON_VENV_PACKAGES: dict[str, Sequence[str]] = {
+    "apt-get": ["python3-venv"],
+    "dnf": ["python3-venv"],
+}
+
 
 def set_bootstrap_enabled(enabled: bool) -> None:
     """Globally enable or disable automatic dependency installation."""
@@ -162,16 +167,88 @@ def ensure_python_requirements(
     python_executable = sys.executable
     logger.info("Ensuring Python virtual environment at %s", venv_dir)
     if not venv_dir.exists():
-        _run([python_executable, "-m", "venv", str(venv_dir)], logger)
+        _create_virtualenv(python_executable, venv_dir, logger)
 
     pip_dir = "Scripts" if os.name == "nt" else "bin"
     pip_path = venv_dir / pip_dir / "pip"
     if not pip_path.exists():  # pragma: no cover - unexpected venv layout
-        raise RuntimeError(f"Virtual environment at {venv_dir} is missing pip")
+        _ensure_pip_available(python_executable, venv_dir, logger)
+        if not pip_path.exists():
+            raise RuntimeError(f"Virtual environment at {venv_dir} is missing pip")
 
     if meaningful:
         logger.info("Installing Python requirements from %s", requirements)
         _run([str(pip_path), "install", "-r", str(requirements)], logger)
+
+
+def _create_virtualenv(python_executable: str, venv_dir: Path, logger: logging.Logger) -> None:
+    try:
+        _run([python_executable, "-m", "venv", str(venv_dir)], logger)
+        return
+    except subprocess.CalledProcessError as exc:
+        logger.debug("python -m venv failed with exit code %s", exc.returncode)
+
+    if not _bootstrap_enabled:
+        raise
+
+    if _ensure_python_venv_support(logger):
+        if venv_dir.exists():
+            shutil.rmtree(venv_dir, ignore_errors=True)
+        _run([python_executable, "-m", "venv", str(venv_dir)], logger)
+        return
+
+    raise
+
+
+def _ensure_pip_available(python_executable: str, venv_dir: Path, logger: logging.Logger) -> None:
+    pip_dir = "Scripts" if os.name == "nt" else "bin"
+    venv_python = venv_dir / pip_dir / ("python.exe" if os.name == "nt" else "python")
+
+    if venv_python.exists():
+        try:
+            _run([str(venv_python), "-m", "ensurepip", "--upgrade"], logger)
+        except subprocess.CalledProcessError as exc:
+            logger.debug("ensurepip failed with exit code %s", exc.returncode)
+        else:
+            return
+
+    if not _bootstrap_enabled:
+        return
+
+    if _ensure_python_venv_support(logger):
+        _run([python_executable, "-m", "venv", "--clear", str(venv_dir)], logger)
+        if venv_python.exists():
+            _run([str(venv_python), "-m", "ensurepip", "--upgrade"], logger)
+
+
+def _ensure_python_venv_support(logger: logging.Logger) -> bool:
+    manager = _detect_package_manager()
+    if not manager:
+        logger.debug("No supported package manager available to install python venv support.")
+        return False
+
+    packages = PYTHON_VENV_PACKAGES.get(manager)
+    if not packages:
+        logger.debug("No python venv package mapping available for manager %s", manager)
+        return False
+
+    try:
+        _install_packages(manager, packages, logger)
+    except PermissionError:
+        logger.warning(
+            "Automatic installation of python virtual environment support requires elevated privileges."
+        )
+        return False
+    except subprocess.CalledProcessError as exc:  # pragma: no cover - defensive logging
+        logger.warning(
+            "Automatic installation of %s via %s failed with exit code %s.",
+            ", ".join(packages),
+            manager,
+            exc.returncode,
+        )
+        return False
+
+    return True
 
 
 def _detect_package_manager() -> str | None:
