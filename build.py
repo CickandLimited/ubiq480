@@ -66,7 +66,7 @@ UBOOT_CONFIG = "mx31ads_config"
 KERNEL_REPO = "https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git"
 KERNEL_REF = "v5.10.217"
 KERNEL_DEFCONFIG = "imx_v4_v5_defconfig"
-DTB_TARGET = "arch/arm/boot/dts/imx31-lite.dtb"
+DTB_TARGET = "imx31-lite.dtb"
 
 
 BOOT_CMD = REPO_ROOT / "boot" / "boot.cmd"
@@ -174,7 +174,7 @@ STAGE_ARTEFACTS: dict[str, list[StageArtefact]] = {
         StageArtefact(
             identifier="output:dtb",
             kind="Build artefact",
-            description="imx31-ubiq480-g070vw01.dtb device tree blob",
+            description="imx31-lite.dtb device tree blob",
             estimated_size_mb=1,
         ),
     ],
