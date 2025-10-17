@@ -1,3 +1,4 @@
 # Generated boot script image
 boot/boot.scr
 output/
+!build.log
