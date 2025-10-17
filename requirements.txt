@@ -1,0 +1,2 @@
+# This project currently relies solely on the Python standard library.
+# Declare third-party dependencies here to have build.py manage them in output/venv.

@@ -44,8 +44,22 @@ support when available.  The resulting filesystem tree includes essential
 configuration files (e.g. `/etc/fstab`, hostname, and serial console service
 overrides) and is staged to `output/rootfs/`.
 
-Install the required tooling before attempting a build.  Debian/Ubuntu hosts
-can use the following package set as a starting point:
+Running `./build.py deps` now attempts to bootstrap the environment when
+possible.  Missing commands are installed via `apt-get` or `dnf` and Python
+dependencies declared in `requirements.txt` are placed inside a reusable
+virtual environment at `output/venv/`.  If the helper cannot obtain elevated
+privileges or a supported package manager is unavailable it falls back to
+reporting the missing tools so they can be installed manually.
+
+Supply `--no-bootstrap` to skip any automated installation attempts and only
+perform validation:
+
+```
+./build.py --no-bootstrap deps
+```
+
+Manual package installation remains an option.  Debian/Ubuntu hosts can use the
+following package set as a starting point:
 
 ```
 sudo apt-get install build-essential git u-boot-tools gcc-arm-linux-gnueabi \
