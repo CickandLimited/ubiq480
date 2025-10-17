@@ -34,6 +34,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from textwrap import dedent
+from typing import Callable
 
 LOG = logging.getLogger("ubiq480.build")
 
@@ -96,6 +97,179 @@ ALL_DEPENDENCIES = [
     "mount",
     "umount",
 ]
+
+
+@dataclass(frozen=True)
+class StageArtefact:
+    """Description of an artefact fetched or produced by a build stage."""
+
+    identifier: str
+    kind: str
+    description: str
+    estimated_size_mb: int | None = None
+    notes: str | None = None
+
+
+PIPELINE_ORDER = ["deps", "uboot", "kernel", "dtb", "boot", "rootfs", "image"]
+
+STAGE_ARTEFACTS: dict[str, list[StageArtefact]] = {
+    "deps": [],
+    "uboot": [
+        StageArtefact(
+            identifier="repo:u-boot",
+            kind="Git repository",
+            description="U-Boot source (depth 64 clone from source.denx.de)",
+            estimated_size_mb=200,
+            notes="Cached under output/cache/u-boot/ for reuse.",
+        ),
+        StageArtefact(
+            identifier="output:u-boot.bin",
+            kind="Build artefact",
+            description="u-boot.bin bootloader image",
+            estimated_size_mb=1,
+        ),
+    ],
+    "kernel": [
+        StageArtefact(
+            identifier="repo:linux",
+            kind="Git repository",
+            description="Linux kernel source (depth 64 clone from kernel.org)",
+            estimated_size_mb=1800,
+            notes="Shared with the dtb stage when run separately.",
+        ),
+        StageArtefact(
+            identifier="output:zImage",
+            kind="Build artefact",
+            description="zImage kernel binary",
+            estimated_size_mb=20,
+        ),
+    ],
+    "dtb": [
+        StageArtefact(
+            identifier="repo:linux",
+            kind="Git repository",
+            description="Linux kernel source (depth 64 clone from kernel.org)",
+            estimated_size_mb=1800,
+            notes="Reused if the kernel stage has already populated the cache.",
+        ),
+        StageArtefact(
+            identifier="output:dtb",
+            kind="Build artefact",
+            description="imx31-ubiq480-g070vw01.dtb device tree blob",
+            estimated_size_mb=1,
+        ),
+    ],
+    "boot": [
+        StageArtefact(
+            identifier="output:boot.scr",
+            kind="Build artefact",
+            description="boot.scr compiled boot script",
+            estimated_size_mb=1,
+        ),
+    ],
+    "rootfs": [
+        StageArtefact(
+            identifier="packages:debootstrap",
+            kind="Package download",
+            description="Debootstrap base system packages from deb.debian.org",
+            estimated_size_mb=600,
+            notes="Written into output/rootfs/",
+        ),
+        StageArtefact(
+            identifier="output:rootfs",
+            kind="Filesystem tree",
+            description="Staged Debian Bookworm root filesystem",
+            estimated_size_mb=1200,
+        ),
+    ],
+    "image": [
+        StageArtefact(
+            identifier="output:ubiq480.img",
+            kind="Disk image",
+            description="Bootable microSD card image",
+            estimated_size_mb=IMAGE_SIZE_MB,
+        ),
+    ],
+}
+
+
+def format_size(estimated_mb: int | None) -> str:
+    """Return a human-readable approximation for *estimated_mb*."""
+
+    if estimated_mb is None:
+        return "unknown size"
+    if estimated_mb >= 1024:
+        gib = estimated_mb / 1024
+        return f"~{gib:.1f} GiB ({estimated_mb} MiB)"
+    return f"~{estimated_mb} MiB"
+
+
+def collect_stage_artefacts(command: str) -> list[StageArtefact]:
+    """Return artefacts associated with *command* (deduplicated for ``all``)."""
+
+    if command == "all":
+        seen: dict[str, StageArtefact] = {}
+        for stage in PIPELINE_ORDER:
+            for artefact in STAGE_ARTEFACTS.get(stage, []):
+                seen.setdefault(artefact.identifier, artefact)
+        return list(seen.values())
+    return list(STAGE_ARTEFACTS.get(command, []))
+
+
+def log_stage_summary(command: str) -> None:
+    """Emit a human-readable summary of artefacts for *command*."""
+
+    artefacts = collect_stage_artefacts(command)
+    stage_label = "full pipeline" if command == "all" else f"'{command}' stage"
+
+    LOG.info("Planned artefacts for the %s:", stage_label)
+    if not artefacts:
+        LOG.info("  (no downloads or large artefacts expected)")
+        return
+
+    total_known_mb = 0
+    has_unknown = False
+    for artefact in artefacts:
+        size_text = format_size(artefact.estimated_size_mb)
+        LOG.info("  - %s (%s, %s)", artefact.description, artefact.kind, size_text)
+        if artefact.notes:
+            LOG.info("      %s", artefact.notes)
+        if artefact.estimated_size_mb is None:
+            has_unknown = True
+        else:
+            total_known_mb += artefact.estimated_size_mb
+
+    if has_unknown and total_known_mb:
+        LOG.info(
+            "Estimated total size: at least %s (additional components have unknown size)",
+            format_size(total_known_mb),
+        )
+    elif has_unknown:
+        LOG.info("Estimated total size: unknown")
+    else:
+        LOG.info("Estimated total size: %s", format_size(total_known_mb))
+
+
+def confirm_execution(command: str, *, assume_yes: bool) -> bool:
+    """Display artefact summary and request confirmation for *command*."""
+
+    log_stage_summary(command)
+    if assume_yes:
+        LOG.info("Proceeding without interactive confirmation because --yes was supplied.")
+        return True
+
+    stage_label = "full pipeline" if command == "all" else f"'{command}' stage"
+    prompt = f"Proceed with the {stage_label}? [y/N]: "
+    try:
+        response = input(prompt)
+    except (EOFError, KeyboardInterrupt):
+        LOG.info("No confirmation received; aborting execution.")
+        return False
+
+    if response.strip().lower() not in {"y", "yes"}:
+        LOG.info("User declined to continue (responded with '%s').", response.strip())
+        return False
+    return True
 
 
 @dataclass
@@ -634,21 +808,29 @@ def check_dependencies(_: argparse.Namespace) -> None:
     LOG.info("All required build dependencies are available.")
 
 
+STAGE_EXECUTORS: dict[str, Callable[[argparse.Namespace], None]] = {
+    "deps": check_dependencies,
+    "uboot": build_uboot,
+    "kernel": build_kernel,
+    "dtb": build_dtb,
+    "boot": build_boot,
+    "rootfs": run_rootfs,
+    "image": build_image,
+}
+
+
 def run_all(args: argparse.Namespace) -> None:
-    for func in [
-        check_dependencies,
-        build_uboot,
-        build_kernel,
-        build_dtb,
-        build_boot,
-        run_rootfs,
-        build_image,
-    ]:
-        func(args)
+    for stage in PIPELINE_ORDER:
+        STAGE_EXECUTORS[stage](args)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build utilities for the Ubiq480 project")
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="Automatically confirm the artefact summary prompts.",
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     deps_parser = subparsers.add_parser("deps", help="Validate build-time dependencies")
@@ -679,6 +861,8 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     setup_logging()
+    if not confirm_execution(args.command, assume_yes=args.yes):
+        return 1
     try:
         args.func(args)
     except RuntimeError as exc:
