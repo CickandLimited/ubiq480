@@ -17,6 +17,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from cli_prompts import MenuCancelled, MenuOption, prompt_for_menu_selection
 from host_bootstrap import ensure_tool, set_bootstrap_enabled
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -42,6 +43,13 @@ def ensure_mkimage() -> None:
         hints={"mkimage": f"Install {MKIMAGE_PACKAGE} (provides mkimage)"},
         logger=LOG,
     )
+
+
+def ensure_dependencies(_: argparse.Namespace) -> None:
+    """Ensure all prerequisites for boot asset generation exist."""
+
+    ensure_mkimage()
+    LOG.info("Verified mkimage is available.")
 
 
 def build_boot_script(_: argparse.Namespace) -> None:
@@ -71,6 +79,12 @@ def build_boot_script(_: argparse.Namespace) -> None:
     print(f"Generated {BOOT_SCR}")
 
 
+ACTION_EXECUTORS = {
+    "deps": ensure_dependencies,
+    "boot": build_boot_script,
+}
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Regenerate boot assets for the UbiQ-480 platform")
     parser.add_argument(
@@ -78,7 +92,13 @@ def main(argv: list[str]) -> int:
         action="store_true",
         help="Skip automatic installation of missing host dependencies.",
     )
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers = parser.add_subparsers(dest="command")
+
+    deps_parser = subparsers.add_parser(
+        "deps",
+        help="Ensure mkimage (from u-boot-tools) is available",
+    )
+    deps_parser.set_defaults(func=ensure_dependencies)
 
     boot_parser = subparsers.add_parser(
         "boot",
@@ -89,8 +109,32 @@ def main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO)
     set_bootstrap_enabled(not args.no_bootstrap)
+
+    if args.command:
+        actions = [args.command]
+    else:
+        options = [
+            MenuOption("deps", "Ensure mkimage is installed"),
+            MenuOption("boot", "Compile boot.cmd into boot.scr"),
+        ]
+        try:
+            actions = prompt_for_menu_selection(
+                "Select one or more boot asset tasks to run:",
+                options,
+                allow_multiple=True,
+                print_func=LOG.info,
+            )
+        except MenuCancelled:
+            LOG.info("No boot asset tasks selected; exiting.")
+            return 1
+
+        if not actions:
+            LOG.info("No boot asset tasks selected; exiting.")
+            return 1
+
     try:
-        args.func(args)
+        for action in actions:
+            ACTION_EXECUTORS[action](args)
     except Exception as exc:  # noqa: BLE001
         print(f"error: {exc}", file=sys.stderr)
         return 1

@@ -39,6 +39,7 @@ from pathlib import Path
 from textwrap import dedent
 from typing import Callable
 
+from cli_prompts import MenuCancelled, MenuOption, prompt_for_menu_selection
 from host_bootstrap import (
     ensure_commands,
     ensure_python_requirements,
@@ -1024,9 +1025,58 @@ STAGE_EXECUTORS: dict[str, Callable[[argparse.Namespace], None]] = {
 }
 
 
+STAGE_DESCRIPTIONS: dict[str, str] = {
+    "deps": "Validate build-time dependencies",
+    "uboot": "Build the U-Boot bootloader",
+    "kernel": "Build the Linux kernel image",
+    "dtb": "Compile the platform device tree",
+    "boot": "Generate the boot.scr script image",
+    "rootfs": "Generate the Debian Bookworm armel root filesystem",
+    "image": "Assemble the complete microSD image",
+    "all": "Execute the full build pipeline",
+}
+
+
 def run_all(args: argparse.Namespace) -> None:
     for stage in PIPELINE_ORDER:
         STAGE_EXECUTORS[stage](args)
+
+
+def _interactive_stage_selection() -> list[str]:
+    options = [
+        MenuOption(stage, f"{stage} – {STAGE_DESCRIPTIONS[stage]}")
+        for stage in [*PIPELINE_ORDER, "all"]
+    ]
+    return prompt_for_menu_selection(
+        "Select one or more build stages to run:",
+        options,
+        allow_multiple=True,
+        print_func=LOG.info,
+    )
+
+
+def _run_selected_commands(commands: list[str], args: argparse.Namespace) -> int:
+    for command in commands:
+        if command == "all":
+            if not confirm_execution("all", assume_yes=args.yes):
+                return 1
+            try:
+                run_all(args)
+            except RuntimeError as exc:
+                LOG.error("%s", exc)
+                return 1
+            continue
+
+        if not confirm_execution(command, assume_yes=args.yes):
+            return 1
+
+        executor = STAGE_EXECUTORS[command]
+        try:
+            executor(args)
+        except RuntimeError as exc:
+            LOG.error("%s", exc)
+            return 1
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1041,45 +1091,37 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Skip automatic installation of missing host dependencies.",
     )
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers = parser.add_subparsers(dest="command")
 
-    deps_parser = subparsers.add_parser("deps", help="Validate build-time dependencies")
-    deps_parser.set_defaults(func=check_dependencies)
-
-    uboot_parser = subparsers.add_parser("uboot", help="Build the U-Boot bootloader")
-    uboot_parser.set_defaults(func=build_uboot)
-
-    kernel_parser = subparsers.add_parser("kernel", help="Build the Linux kernel image")
-    kernel_parser.set_defaults(func=build_kernel)
-
-    dtb_parser = subparsers.add_parser("dtb", help="Compile the platform device tree")
-    dtb_parser.set_defaults(func=build_dtb)
-
-    boot_parser = subparsers.add_parser("boot", help="Generate the boot.scr script image")
-    boot_parser.set_defaults(func=build_boot)
-
-    rootfs_parser = subparsers.add_parser(
-        "rootfs", help="Generate the Debian Bookworm armel root filesystem"
-    )
-    rootfs_parser.set_defaults(func=run_rootfs)
-
-    image_parser = subparsers.add_parser("image", help="Assemble the complete microSD image")
-    image_parser.set_defaults(func=build_image)
-
-    all_parser = subparsers.add_parser("all", help="Execute the full build pipeline")
-    all_parser.set_defaults(func=run_all)
+    for stage, description in STAGE_DESCRIPTIONS.items():
+        parser_name = subparsers.add_parser(stage, help=description)
+        if stage == "all":
+            parser_name.set_defaults(func=run_all)
+        else:
+            parser_name.set_defaults(func=STAGE_EXECUTORS[stage])
 
     args = parser.parse_args(argv)
     setup_logging()
     set_bootstrap_enabled(not args.no_bootstrap)
-    if not confirm_execution(args.command, assume_yes=args.yes):
-        return 1
-    try:
-        args.func(args)
-    except RuntimeError as exc:
-        LOG.error("%s", exc)
-        return 1
-    return 0
+
+    if args.command:
+        commands = [args.command]
+    else:
+        try:
+            commands = _interactive_stage_selection()
+        except MenuCancelled:
+            LOG.info("No build stages selected; exiting.")
+            return 1
+
+        if not commands:
+            LOG.info("No build stages selected; exiting.")
+            return 1
+
+        if "all" in commands and len(commands) > 1:
+            LOG.info("'all' selected alongside other stages; executing the full pipeline.")
+            commands = ["all"]
+
+    return _run_selected_commands(commands, args)
 
 
 if __name__ == "__main__":

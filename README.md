@@ -8,20 +8,23 @@ All build stages are coordinated by `build.py`.  The helper includes dedicated
 subcommands for each component as well as an `all` meta target that produces a
 fully populated microSD image in a single invocation.
 
+Running `./build.py` without arguments opens an interactive menu that lists the
+available build stages.  Select one or more entries to queue up tasks for the
+current session or press `q`/`Ctrl+C` to abort.  This is especially convenient
+for exploratory workflows where you want to run a subset of stages without
+remembering every subcommand name.
+
 ```
-./build.py deps     # verify required host dependencies
-./build.py all      # build bootloader, kernel, rootfs and ubiq480.img
+./build.py             # interactive picker
+./build.py deps        # headless mode via argparse
+./build.py --yes all   # build bootloader, kernel, rootfs and ubiq480.img
 ```
 
 Before any stage runs, the helper prints a summary of the artefacts that will be
 downloaded or created along with their estimated sizes.  Confirm the prompt to
 continue or abort with the default `N` response.  Supply `--yes` for
 non-interactive or automated environments to skip the confirmation while still
-emitting the summary, for example:
-
-```
-./build.py --yes all
-```
+emitting the summary.
 
 The following artefacts are written to `output/`:
 
@@ -69,3 +72,15 @@ sudo apt-get install build-essential git u-boot-tools gcc-arm-linux-gnueabi \
 
 The final image assembly (`image` stage) requires root privileges because it
 creates loop devices, partitions them, and mounts the resulting filesystems.
+
+## Boot assets helper
+
+`generate_boot_assets.py` follows the same pattern.  Launch it without
+arguments to receive a menu for ensuring dependencies or rebuilding `boot.scr`.
+Individual actions remain available as subcommands for scripts or CI jobs:
+
+```
+./generate_boot_assets.py          # interactive menu
+./generate_boot_assets.py deps     # ensure mkimage is installed
+./generate_boot_assets.py boot     # rebuild boot.scr immediately
+```
