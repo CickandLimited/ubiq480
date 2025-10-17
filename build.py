@@ -47,6 +47,7 @@ from host_bootstrap import (
     set_bootstrap_enabled,
 )
 from progress import ProgressUpdate, format_progress_message, get_progress_parser
+from self_check import ensure_latest_checkout
 
 LOG = logging.getLogger("ubiq480.build")
 
@@ -1102,6 +1103,7 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     setup_logging()
+    ensure_latest_checkout(REPO_ROOT, logger=LOG)
     set_bootstrap_enabled(not args.no_bootstrap)
 
     if args.command:
