@@ -27,8 +27,37 @@ class EnsureLatestCheckoutTests(unittest.TestCase):
             "self_check._resolve_local_head", return_value="abc"
         ), mock.patch("self_check._resolve_remote_head", return_value="def"), mock.patch(
             "pathlib.Path.exists", return_value=True
-        ), self.assertRaises(SystemExit) as exc:
+        ), mock.patch("self_check._is_interactive", return_value=False), self.assertRaises(SystemExit) as exc:
             self_check.ensure_latest_checkout(fake_repo)
+
+        self.assertIn("out-of-date", str(exc.exception))
+
+    def test_accepting_prompt_updates_checkout(self) -> None:
+        fake_repo = Path("/tmp/fake-repo")
+        with mock.patch.dict(os.environ, {}, clear=False), mock.patch(
+            "self_check._resolve_local_head", side_effect=["abc", "def"]
+        ) as local_mock, mock.patch("self_check._resolve_remote_head", return_value="def"), mock.patch(
+            "pathlib.Path.exists", return_value=True
+        ), mock.patch("self_check._is_interactive", return_value=True), mock.patch(
+            "builtins.input", return_value="y"
+        ), mock.patch("self_check._run_git_command") as git_mock:
+            self_check.ensure_latest_checkout(fake_repo)
+
+        self.assertEqual(local_mock.call_count, 2)
+        git_mock.assert_any_call(["fetch", self_check.CANONICAL_REPOSITORY], cwd=fake_repo)
+        git_mock.assert_any_call(["reset", "--hard", "FETCH_HEAD"], cwd=fake_repo)
+
+    def test_declining_prompt_raises(self) -> None:
+        fake_repo = Path("/tmp/fake-repo")
+        with mock.patch.dict(os.environ, {}, clear=False), mock.patch(
+            "self_check._resolve_local_head", return_value="abc"
+        ), mock.patch("self_check._resolve_remote_head", return_value="def"), mock.patch(
+            "pathlib.Path.exists", return_value=True
+        ), self.assertRaises(SystemExit) as exc:
+            with mock.patch("self_check._is_interactive", return_value=True), mock.patch(
+                "builtins.input", return_value="n"
+            ):
+                self_check.ensure_latest_checkout(fake_repo)
 
         self.assertIn("out-of-date", str(exc.exception))
 

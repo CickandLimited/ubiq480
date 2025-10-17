@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
+import sys
 from pathlib import Path
 from textwrap import dedent
 
@@ -99,6 +100,10 @@ def ensure_latest_checkout(repo_root: Path | None = None, *, logger: logging.Log
         raise SystemExit(message) from exc
 
     if local_head != remote_head:
+        if _is_interactive():
+            if _attempt_automatic_update(repo_root, local_head, remote_head, logger):
+                return
+
         message = dedent(
             f"""
             This checkout (commit {local_head}) is out-of-date with the canonical
@@ -117,4 +122,80 @@ def ensure_latest_checkout(repo_root: Path | None = None, *, logger: logging.Log
 
     if logger:
         logger.info("Repository matches canonical HEAD %s", remote_head)
+
+
+def _is_interactive() -> bool:
+    """Return ``True`` when standard input is available for prompting."""
+
+    return sys.stdin is not None and sys.stdin.isatty()
+
+
+def _attempt_automatic_update(
+    repo_root: Path,
+    local_head: str,
+    remote_head: str,
+    logger: logging.Logger | None,
+) -> bool:
+    """Prompt the user to update and execute the sync when accepted."""
+
+    prompt = dedent(
+        f"""
+        This checkout (commit {local_head}) is out-of-date with the canonical
+        repository HEAD ({remote_head}).
+
+        Would you like to update automatically now? [y/N]: """
+    )
+
+    try:
+        response = input(prompt)
+    except EOFError:
+        return False
+
+    if response.strip().lower() not in {"y", "yes"}:
+        return False
+
+    try:
+        _run_git_command(["fetch", CANONICAL_REPOSITORY], cwd=repo_root)
+        _run_git_command(["reset", "--hard", "FETCH_HEAD"], cwd=repo_root)
+    except subprocess.CalledProcessError as exc:
+        message = dedent(
+            f"""
+            Automatic update failed while running: {' '.join(str(part) for part in exc.cmd)}
+            The command exited with status {exc.returncode}. Try updating manually by running:
+
+                git fetch {CANONICAL_REPOSITORY}
+                git reset --hard FETCH_HEAD
+            """
+        ).strip()
+        if logger:
+            logger.error(message)
+        raise SystemExit(message) from exc
+
+    try:
+        updated_head = _resolve_local_head(repo_root)
+    except subprocess.CalledProcessError as exc:  # pragma: no cover - defensive guard
+        message = dedent(
+            """
+            Automatic update completed but verifying the new revision failed.
+            Ensure git is available and try updating manually.
+            """
+        ).strip()
+        if logger:
+            logger.error(message)
+        raise SystemExit(message) from exc
+
+    if updated_head != remote_head:
+        message = dedent(
+            """
+            Automatic update completed but the checkout still differs from the
+            canonical repository. Please run the update commands manually.
+            """
+        ).strip()
+        if logger:
+            logger.error(message)
+        raise SystemExit(message)
+
+    if logger:
+        logger.info("Repository updated to canonical HEAD %s", remote_head)
+    return True
 
